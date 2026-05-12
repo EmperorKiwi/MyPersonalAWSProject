@@ -282,13 +282,6 @@ After all steps complete, capture these screenshots:
 
 ---
 
-
-### Why metric names have `mp_` prefix
-
-Document this in your report — it shows AWS knowledge:
-
-> *"All custom metrics emitted by the application are prefixed with `mp_` (e.g. `mp_BookingsCreated`, `mp_BookingErrors`). This namespacing prevents collision with metrics from other groups sharing the AWS Academy environment, and makes it trivial to filter them in CloudWatch dashboard widgets. Note that CloudWatch does not support metric deletion via API — older un-prefixed test metrics from earlier development iterations remain visible in the full history view but are filtered out by searching for the prefix."*
-
 ### Why metrics push is synchronous
 
 > *"The metrics helper pushes data points synchronously rather than via background processes. Asynchronous (`&`) execution adds ~0ms latency but Apache occasionally kills background processes when the request finishes — sometimes before AWS CLI completes the API call. We accepted the ~200ms latency cost in exchange for guaranteed metric delivery."*
