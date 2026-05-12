@@ -1,21 +1,6 @@
-#  Campus Resource Manager v4 — Complete Deployment Bundle
+#  Campus Resource Manager — Complete Deployment Bundle
 
-This is the consolidated, fully-tested bundle that wraps every fix discovered during D2 development. Use this for a fresh deployment or to update an existing stack.
-
-## What's New in v4
-
-| Fix | Where |
-|---|---|
-| **All metrics auto-prefixed `mp_`** | `metrics.php` |
-| **Synchronous metric push** (so they actually appear in CloudWatch) | `metrics.php` |
-| **Apache timezone warning eliminated** | `deploy.sh` step 2 |
-| **PHP 5.6+ compatible syntax** (no `??`, no short echo `<?=`) | All `.php` files |
-| **Database created with `utf8mb4_general_ci` collation** (avoids MySQL 8 charset error) | `deploy.sh` step 5 |
-| **DirectoryIndex prefers index.php** | `deploy.sh` step 3 |
-| **Placeholder index.html removed** | `deploy.sh` step 6 |
-| **Booking latency tracking** | `confirm.php` (new metric `mp_BookingLatency`) |
-| **SNS email subscription script** | `setup_sns.sh` |
-| **All 4 alarms refer to `mp_*` metrics** | `setup_sns.sh` |
+This is the consolidated, fully-tested bundle that wraps every fix discovered during development. Use this for a fresh deployment or to update an existing stack.
 
 ## Bundle Contents
 
