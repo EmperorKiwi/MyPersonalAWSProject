@@ -1,4 +1,4 @@
-# Group 3 - Campus Resource Manager v4 — Complete Deployment Bundle
+#  Campus Resource Manager v4 — Complete Deployment Bundle
 
 This is the consolidated, fully-tested bundle that wraps every fix discovered during D2 development. Use this for a fresh deployment or to update an existing stack.
 
