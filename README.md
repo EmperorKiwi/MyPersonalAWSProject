@@ -1,8 +1,9 @@
-#  Campus Resource Manager — Complete Deployment Bundle
+<img width="2242" height="1431" alt="MyProject_Architecture" src="https://github.com/user-attachments/assets/273716f2-e032-4e35-84fd-0be3da89cd03" />#  Campus Resource Manager — Complete Deployment Bundle
 
 This is the consolidated, fully-tested bundle that wraps every fix discovered during development. Use this for a fresh deployment or to update an existing stack.
 
 ## Bundle Contents
+
 
 ```
 MyProject_v4/
