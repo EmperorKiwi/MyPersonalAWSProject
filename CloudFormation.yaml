@@ -1,0 +1,1049 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CMP6210 Cloud Computing - Deliverable 2
+  Enhancement of Cloud Infrastructure and Deployment of an Application
+  MyProject - All resources prefixed with MyProject_
+  Note: CloudFront is not used (blocked in AWS Academy Learner Labs).
+  S3 Static Website Hosting is used as the approved alternative per the
+  AWS Academy Student Workaround Guide.
+
+# ============================================================
+#  PARAMETERS
+# ============================================================
+Parameters:
+
+  GroupNumber:
+    Type: String
+    Default: "3"
+    Description: >
+      Group number. All resource names are prefixed GroupN_.
+      Mandatory - resources without this prefix receive no marks.
+
+  DBMasterUsername:
+    Type: String
+    Default: "admin"
+    Description: Master username for the RDS MySQL instance.
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master password for the RDS MySQL instance (min 8 chars).
+
+  EC2KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: >
+      Existing EC2 Key Pair for SSH access to web servers.
+      Create one in EC2 > Key Pairs before deploying.
+
+  EC2InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+    Description: EC2 instance type for both web servers.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t2.micro
+    Description: RDS instance class.
+
+  LabRoleInstanceProfileName:
+    Type: String
+    Default: "LabRole"
+    Description: >
+      AWS Academy pre-existing IAM instance profile name.
+      AWS Academy Learner Labs provide LabRole as both role and instance profile.
+      Do NOT change unless your lab shows a different name under AWS Details.
+
+# ============================================================
+#  MAPPINGS  (Amazon Linux 2023 AMIs per region)
+# ============================================================
+Mappings:
+  RegionAMI:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-east-2:
+      AMI: ami-0103f211a154d64a6
+    eu-west-1:
+      AMI: ami-0d64bb532e0502c46
+    eu-west-2:
+      AMI: ami-0eb260c4d5475b901
+    ap-southeast-1:
+      AMI: ami-07c16fe7c62b79a24
+
+# ============================================================
+#  RESOURCES
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # 1. VPC  (carried over and refined from D1)
+  # ----------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_VPC"
+
+  # ----------------------------------------------------------
+  # 2. Internet Gateway
+  # ----------------------------------------------------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_IGW"
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ----------------------------------------------------------
+  # 3. Subnets  (2 public + 2 private across 2 AZs for HA)
+  # ----------------------------------------------------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PublicSubnet1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PublicSubnet2"
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.3.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PrivateSubnet1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 192.168.4.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PrivateSubnet2"
+
+  # ----------------------------------------------------------
+  # 4. Route Tables
+  # ----------------------------------------------------------
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PublicRT"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_PrivateRT"
+
+  PrivateSubnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ----------------------------------------------------------
+  # 5. Security Groups  (security best practice: least privilege)
+  # ----------------------------------------------------------
+
+  # ALB SG: internet-facing, accepts HTTP/HTTPS from anywhere
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Group${GroupNumber} ALB SG - internet-facing HTTP/HTTPS only"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP from internet"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS from internet"
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "Allow all outbound"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_ALBSG"
+
+  # Web Server SG: only accepts HTTP from ALB SG (not open internet)
+  WebServerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Group${GroupNumber} WebServer SG - HTTP from ALB only; SSH admin"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSG
+          Description: "HTTP from ALB only (not open internet)"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSG
+          Description: "HTTPS from ALB only"
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: "SSH - restrict to known IP in production"
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "Allow all outbound"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_WebServerSG"
+
+  # DB SG: MySQL port only from WebServer SG — never from internet
+  DBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Group${GroupNumber} RDS SG - MySQL from WebServer SG only"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebServerSG
+          Description: "MySQL from EC2 web servers only (least privilege)"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_DBSG"
+
+  # ----------------------------------------------------------
+  # 6. EC2 Web Server 1  (PublicSubnet1 / AZ-a)
+  # ----------------------------------------------------------
+  WebServer1:
+    Type: AWS::EC2::Instance
+    DependsOn: StaticContentBucket
+    Properties:
+      InstanceType: !Ref EC2InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref WebServerSG
+      KeyName: !Ref EC2KeyPairName
+      # AWS Academy Learner Lab workaround: IamInstanceProfile cannot be set via CloudFormation API.
+      # After stack creation, manually attach LabRole: EC2 Console → select instance → Actions → Security → Modify IAM Role → LabRole.
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd mariadb105 awscli amazon-cloudwatch-agent
+            systemctl start httpd
+            systemctl enable httpd
+
+            AZ=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+            # Pull static assets from S3 into local Apache directory.
+            # LabRole grants S3 read access — bucket stays private, no public policy needed.
+            mkdir -p /var/www/html/static
+            aws s3 sync s3://${BucketName}/static/ /var/www/html/static/ --region ${AWSRegion} || true
+
+            # Schedule periodic sync so new uploads appear within 5 minutes
+            echo "*/5 * * * * aws s3 sync s3://${BucketName}/static/ /var/www/html/static/ --region ${AWSRegion}" | crontab -
+
+            # ─── FIX: Install PHP and prefer index.php over index.html ───────────
+            yum install -y php php-cli php-mysqlnd php-mbstring php-json
+            rm -f /var/www/html/index.html         # Remove any default placeholder
+            rm -f /etc/httpd/conf.d/welcome.conf   # Remove Apache welcome page
+            echo "DirectoryIndex index.php index.html" > /etc/httpd/conf.d/dir.conf
+            systemctl restart httpd
+            
+            # Create marker file so deploy.sh knows infrastructure is ready
+            echo "WebServer1" > /var/www/html/server-id.txt
+            chown apache:apache /var/www/html/server-id.txt
+
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWEOF'
+            {
+              "metrics": {
+                "namespace": "Group${GroupNumber}/WebServer",
+                "append_dimensions": {
+                  "InstanceId": "${!aws:InstanceId}",
+                  "InstanceType": "${!aws:InstanceType}"
+                },
+                "metrics_collected": {
+                  "cpu": {
+                    "measurement": ["cpu_usage_active", "cpu_usage_idle"],
+                    "metrics_collection_interval": 60,
+                    "totalcpu": true
+                  },
+                  "mem": {
+                    "measurement": ["mem_used_percent", "mem_available"],
+                    "metrics_collection_interval": 60
+                  },
+                  "disk": {
+                    "measurement": ["disk_used_percent"],
+                    "resources": ["/"],
+                    "metrics_collection_interval": 60
+                  }
+                }
+              },
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/httpd/access_log",
+                        "log_group_name": "/group${GroupNumber}/webserver/access",
+                        "log_stream_name": "webserver1-access"
+                      },
+                      {
+                        "file_path": "/var/log/httpd/error_log",
+                        "log_group_name": "/group${GroupNumber}/webserver/error",
+                        "log_stream_name": "webserver1-error"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            CWEOF
+
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config \
+              -m ec2 \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+              -s
+          - BucketName: !Ref StaticContentBucket
+            AWSRegion: !Ref "AWS::Region"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_WebServer1"
+
+  # ----------------------------------------------------------
+  # 7. EC2 Web Server 2  (PublicSubnet2 / AZ-b — HIGH AVAILABILITY)
+  # ----------------------------------------------------------
+  WebServer2:
+    Type: AWS::EC2::Instance
+    DependsOn: StaticContentBucket
+    Properties:
+      InstanceType: !Ref EC2InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds:
+        - !Ref WebServerSG
+      KeyName: !Ref EC2KeyPairName
+      # AWS Academy Learner Lab workaround: IamInstanceProfile cannot be set via CloudFormation API.
+      # After stack creation, manually attach LabRole: EC2 Console → select instance → Actions → Security → Modify IAM Role → LabRole.
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd mariadb105 awscli amazon-cloudwatch-agent
+            sudo yum install mysql 
+            systemctl start httpd
+            systemctl enable httpd
+
+            AZ=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+            mkdir -p /var/www/html/static
+            aws s3 sync s3://${BucketName}/static/ /var/www/html/static/ --region ${AWSRegion} || true
+            echo "*/5 * * * * aws s3 sync s3://${BucketName}/static/ /var/www/html/static/ --region ${AWSRegion}" | crontab -
+
+            # ─── FIX: Install PHP and prefer index.php over index.html ───────────
+            yum install -y php php-cli php-mysqlnd php-mbstring php-json
+            rm -f /var/www/html/index.html         # Remove any default placeholder
+            rm -f /etc/httpd/conf.d/welcome.conf   # Remove Apache welcome page
+            echo "DirectoryIndex index.php index.html" > /etc/httpd/conf.d/dir.conf
+            systemctl restart httpd
+            
+            # Create marker file so deploy.sh knows infrastructure is ready
+            echo "WebServer2" > /var/www/html/server-id.txt
+            chown apache:apache /var/www/html/server-id.txt
+
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWEOF'
+            {
+              "metrics": {
+                "namespace": "Group${GroupNumber}/WebServer",
+                "append_dimensions": {
+                  "InstanceId": "${!aws:InstanceId}",
+                  "InstanceType": "${!aws:InstanceType}"
+                },
+                "metrics_collected": {
+                  "cpu": {
+                    "measurement": ["cpu_usage_active", "cpu_usage_idle"],
+                    "metrics_collection_interval": 60,
+                    "totalcpu": true
+                  },
+                  "mem": {
+                    "measurement": ["mem_used_percent", "mem_available"],
+                    "metrics_collection_interval": 60
+                  },
+                  "disk": {
+                    "measurement": ["disk_used_percent"],
+                    "resources": ["/"],
+                    "metrics_collection_interval": 60
+                  }
+                }
+              },
+              "logs": {
+                "logs_collected": {
+                  "files": {
+                    "collect_list": [
+                      {
+                        "file_path": "/var/log/httpd/access_log",
+                        "log_group_name": "/group${GroupNumber}/webserver/access",
+                        "log_stream_name": "webserver2-access"
+                      },
+                      {
+                        "file_path": "/var/log/httpd/error_log",
+                        "log_group_name": "/group${GroupNumber}/webserver/error",
+                        "log_stream_name": "webserver2-error"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            CWEOF
+
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config \
+              -m ec2 \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+              -s
+          - BucketName: !Ref StaticContentBucket
+            AWSRegion: !Ref "AWS::Region"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_WebServer2"
+
+  # ----------------------------------------------------------
+  # 8. Application Load Balancer  (HIGH AVAILABILITY across 2 AZs)
+  # ----------------------------------------------------------
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "Group${GroupNumber}-TG"
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref WebServer1
+          Port: 80
+        - Id: !Ref WebServer2
+          Port: 80
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_TG"
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "Group${GroupNumber}-ALB"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSG
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_ALB"
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ----------------------------------------------------------
+  # 9. S3 Static Content Bucket  (PRIVATE — served via EC2/Apache)
+  #    CloudFront is BLOCKED in AWS Academy Learner Labs.
+  #    S3 Static Website Hosting with a public bucket policy is also blocked
+  #    because the account-level S3 Block Public Access policy (BlockPublicPolicy)
+  #    prevents any Principal:"*" bucket policy from being applied.
+  #    Workaround: bucket stays private; EC2 instances pull files from S3 using
+  #    LabRole credentials (aws s3 sync) and Apache serves them locally.
+  #    This still satisfies the "Use of S3" requirement and demonstrates
+  #    S3 integration — files are stored in and distributed from S3.
+  # ----------------------------------------------------------
+  StaticContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "group${GroupNumber}-static-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false      # ← allow bucket policy with public read
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false  # ← allow public access via bucket policy
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_StaticBucket"
+
+  # ----------------------------------------------------------
+  # 10. S3 CloudTrail Logs Bucket  (private, encrypted)
+  # ----------------------------------------------------------
+
+  # ----------------------------------------------------------
+  # Public read for service images (needed for D2 image display)
+  # ----------------------------------------------------------
+  StaticContentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticContentBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowPublicReadServices
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${StaticContentBucket}/services/*"
+          - Sid: AllowPublicReadStatic
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${StaticContentBucket}/static/*"
+
+  CloudTrailLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "group${GroupNumber}-cloudtrail-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveOldLogs
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+            ExpirationInDays: 365
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_CloudTrailBucket"
+
+  CloudTrailLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudTrailLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !Sub "arn:aws:s3:::${CloudTrailLogsBucket}"
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "arn:aws:s3:::${CloudTrailLogsBucket}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+
+  # ----------------------------------------------------------
+  # 11. CloudTrail  (audit logging of all API calls)
+  # ----------------------------------------------------------
+  CloudTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: CloudTrailLogsBucketPolicy
+    Properties:
+      TrailName: !Sub "Group${GroupNumber}-Trail"
+      S3BucketName: !Ref CloudTrailLogsBucket
+      IsLogging: true
+      IncludeGlobalServiceEvents: true
+      IsMultiRegionTrail: false
+      EnableLogFileValidation: true
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+          DataResources:
+            - Type: AWS::S3::Object
+              Values:
+                - !Sub "arn:aws:s3:::${StaticContentBucket}/"
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_CloudTrail"
+
+  # ----------------------------------------------------------
+  # 12. CloudWatch Dashboard  (visibility across all services)
+  # ----------------------------------------------------------
+  CloudWatchDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "Group${GroupNumber}-Dashboard"
+      DashboardBody: !Sub
+        - |
+          {
+            "widgets": [
+              {
+                "type": "text",
+                "x": 0, "y": 0, "width": 24, "height": 1,
+                "properties": {
+                  "markdown": "# Group${GroupNumber} Infrastructure Dashboard — CMP6210 D2"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0, "y": 1, "width": 12, "height": 6,
+                "properties": {
+                  "title": "EC2 CPU Utilization (AWS/EC2)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/EC2", "CPUUtilization", "InstanceId", "${WS1ID}", {"label": "WebServer1", "color": "#1f77b4"}],
+                    ["AWS/EC2", "CPUUtilization", "InstanceId", "${WS2ID}", {"label": "WebServer2", "color": "#ff7f0e"}]
+                  ],
+                  "period": 300,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "yAxis": {"left": {"min": 0, "max": 100}},
+                  "annotations": {"horizontal": [{"value": 80, "label": "Alarm threshold", "color": "#d62728"}]}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12, "y": 1, "width": 12, "height": 6,
+                "properties": {
+                  "title": "Custom Metric: Memory Used % (Group${GroupNumber}/WebServer namespace)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["Group${GroupNumber}/WebServer", "mem_used_percent", {"label": "Memory Used %"}]
+                  ],
+                  "period": 300,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "yAxis": {"left": {"min": 0, "max": 100}},
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0, "y": 7, "width": 8, "height": 6,
+                "properties": {
+                  "title": "ALB Request Count",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${ALBFullName}", {"label": "Requests", "stat": "Sum"}]
+                  ],
+                  "period": 300,
+                  "stat": "Sum",
+                  "view": "timeSeries",
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8, "y": 7, "width": 8, "height": 6,
+                "properties": {
+                  "title": "ALB Unhealthy Host Count",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ApplicationELB", "UnHealthyHostCount", "TargetGroup", "${TGFullName}", "LoadBalancer", "${ALBFullName}", {"label": "Unhealthy Hosts", "color": "#d62728"}]
+                  ],
+                  "period": 60,
+                  "stat": "Maximum",
+                  "view": "timeSeries",
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16, "y": 7, "width": 8, "height": 6,
+                "properties": {
+                  "title": "ALB Target Response Time (ms)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${ALBFullName}", {"label": "Response Time (s)"}]
+                  ],
+                  "period": 60,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0, "y": 13, "width": 12, "height": 6,
+                "properties": {
+                  "title": "RDS CPU Utilization",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "group${GroupNumber}-rds", {"label": "RDS CPU %"}]
+                  ],
+                  "period": 300,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "yAxis": {"left": {"min": 0, "max": 100}},
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12, "y": 13, "width": 12, "height": 6,
+                "properties": {
+                  "title": "RDS Database Connections & Free Storage",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "group${GroupNumber}-rds", {"label": "Connections", "yAxis": "left"}],
+                    ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "group${GroupNumber}-rds", {"label": "Free Storage (bytes)", "yAxis": "right"}]
+                  ],
+                  "period": 300,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0, "y": 19, "width": 12, "height": 6,
+                "properties": {
+                  "title": "Custom Metric: Disk Used % (Group${GroupNumber}/WebServer namespace)",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    ["Group${GroupNumber}/WebServer", "disk_used_percent", {"label": "Disk Used %"}]
+                  ],
+                  "period": 300,
+                  "stat": "Average",
+                  "view": "timeSeries",
+                  "annotations": {"horizontal": []}
+                }
+              },
+              {
+                "type": "alarm",
+                "x": 12, "y": 19, "width": 12, "height": 6,
+                "properties": {
+                  "title": "Active Alarms Summary",
+                  "alarms": [
+                    "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Group${GroupNumber}_HighCPU_WebServer1",
+                    "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Group${GroupNumber}_HighCPU_WebServer2",
+                    "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Group${GroupNumber}_UnhealthyHosts",
+                    "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Group${GroupNumber}_HighCPU_RDS"
+                  ]
+                }
+              }
+            ]
+          }
+        - WS1ID: !Ref WebServer1
+          WS2ID: !Ref WebServer2
+          ALBFullName: !GetAtt ALB.LoadBalancerFullName
+          TGFullName: !GetAtt ALBTargetGroup.TargetGroupFullName
+
+  # ----------------------------------------------------------
+  # 13. CloudWatch Alarms
+  # ----------------------------------------------------------
+
+  CPUAlarmWebServer1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "Group${GroupNumber}_HighCPU_WebServer1"
+      AlarmDescription: "WebServer1 CPU sustained above 80% - investigate load"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref WebServer1
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CPUAlarmWebServer2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "Group${GroupNumber}_HighCPU_WebServer2"
+      AlarmDescription: "WebServer2 CPU sustained above 80% - investigate load"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref WebServer2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  UnhealthyHostsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "Group${GroupNumber}_UnhealthyHosts"
+      AlarmDescription: "One or more ALB targets are unhealthy - possible instance failure"
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt ALBTargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ALBHighRequestAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "Group${GroupNumber}_HighRequests_ALB"
+      AlarmDescription: "ALB request count exceeds 1000 in 5 minutes - unusual traffic spike"
+      Namespace: AWS/ApplicationELB
+      MetricName: RequestCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  RDSHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "Group${GroupNumber}_HighCPU_RDS"
+      AlarmDescription: "RDS CPU sustained above 80% - query optimisation needed"
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub "group${GroupNumber}-rds"
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # ----------------------------------------------------------
+  # 14. RDS DB Subnet Group
+  # ----------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "group${GroupNumber}-dbsubnetgroup"
+      DBSubnetGroupDescription: !Sub "Group${GroupNumber} DB Subnet Group - private subnets across 2 AZs"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_DBSubnetGroup"
+
+  # ----------------------------------------------------------
+  # 14b. Custom DB Parameter Group (FIXES PHP charset error)
+  # ----------------------------------------------------------
+  # Without this, PHP fails with "Server sent charset unknown to the client"
+  # because RDS MySQL 8 defaults to utf8mb4_0900_ai_ci collation, which the
+  # mariadb-connector-c shipped on Amazon Linux 2023 cannot parse.
+  # We override character set/collation to the legacy-compatible values.
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub "Group${GroupNumber} - utf8mb4 with general_ci (PHP-compatible)"
+      Family: mysql8.0
+      Parameters:
+        character_set_client: utf8mb4
+        character_set_connection: utf8mb4
+        character_set_database: utf8mb4
+        character_set_results: utf8mb4
+        character_set_server: utf8mb4
+        collation_connection: utf8mb4_general_ci
+        collation_server: utf8mb4_general_ci
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_DBParamGroup"
+
+  # ----------------------------------------------------------
+  # 15. RDS MySQL  (Multi-AZ for HIGH AVAILABILITY, encrypted, private)
+  # ----------------------------------------------------------
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub "group${GroupNumber}-rds"
+      DBName: !Sub "group${GroupNumber}db"
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: mysql
+      EngineVersion: "8.0"
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      AllocatedStorage: "20"
+      StorageType: gp2
+      MultiAZ: true
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBParameterGroupName: !Ref DBParameterGroup    # ← FIX: PHP charset compatibility
+      VPCSecurityGroups:
+        - !Ref DBSG
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      StorageEncrypted: true
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Group${GroupNumber}_RDS"
+
+# ============================================================
+#  OUTPUTS
+# ============================================================
+Outputs:
+
+  ApplicationURL:
+    Description: >
+      PRIMARY application URL via the Application Load Balancer.
+      Use this to access and test the deployed application.
+    Value: !Sub "http://${ALB.DNSName}"
+
+  StaticBucketS3URI:
+    Description: >
+      Upload static assets (images, CSS, JS) to this S3 path using the console
+      or: aws s3 cp logo.png s3://<BucketName>/static/logo.png
+      EC2 instances pull files automatically every 5 minutes via cron + LabRole.
+    Value: !Sub "s3://${StaticContentBucket}/static/"
+
+  StaticBucketName:
+    Description: S3 static content bucket name (upload files here)
+    Value: !Ref StaticContentBucket
+
+  CloudTrailLogsBucketName:
+    Description: S3 bucket storing CloudTrail audit logs
+    Value: !Ref CloudTrailLogsBucket
+
+  CloudWatchDashboardURL:
+    Description: Direct link to the CloudWatch monitoring dashboard
+    Value: !Sub >-
+      https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=Group${GroupNumber}-Dashboard
+
+  ManualStepAttachLabRole:
+    Description: >
+      AWS ACADEMY MANUAL STEP REQUIRED: After stack creation, attach LabRole to BOTH EC2 instances.
+      EC2 Console → select WebServer1 → Actions → Security → Modify IAM Role → select LabRole → Update IAM Role.
+      Repeat for WebServer2. This enables S3 access (aws s3 sync) from inside the instances.
+    Value: "Attach LabRole manually to WebServer1 and WebServer2 via EC2 Console"
+
+  WebServer1PublicIP:
+    Description: WebServer1 public IP (AZ-a) for direct SSH/testing
+    Value: !GetAtt WebServer1.PublicIp
+
+  WebServer2PublicIP:
+    Description: WebServer2 public IP (AZ-b) for direct SSH/testing
+    Value: !GetAtt WebServer2.PublicIp
+
+  RDSEndpoint:
+    Description: RDS MySQL endpoint — connect from EC2 to verify DB connectivity
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  RDSPort:
+    Description: RDS MySQL port
+    Value: !GetAtt RDSInstance.Endpoint.Port
+
+  SSHWebServer1:
+    Description: Example SSH command for WebServer1
+    Value: !Sub "ssh -i <your-key.pem> ec2-user@${WebServer1.PublicDnsName}"
+
+  SSHWebServer2:
+    Description: Example SSH command for WebServer2
+    Value: !Sub "ssh -i <your-key.pem> ec2-user@${WebServer2.PublicDnsName}"
+
+  MySQLTestCommand:
+    Description: Example command to test RDS from EC2 (run after SSH into a web server)
+    Value: !Sub "mysql -h ${RDSInstance.Endpoint.Address} -u ${DBMasterUsername} -p"
